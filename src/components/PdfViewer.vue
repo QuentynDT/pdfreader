@@ -15,10 +15,8 @@
     />
   </div>
 </template>
-
 <script>
 import PdfEmbed from 'vue-pdf-embed';
-
 export default {
   components: { PdfEmbed },
   props: {
@@ -56,10 +54,9 @@ export default {
       console.log('After zoomOut, scale:', this.scale);
     },
     handleWheelZoom(event) {
-      // Check if Ctrl key is pressed, which often indicates pinch-to-zoom on touchpads
       if (event.ctrlKey) {
-        event.preventDefault(); // Prevent default browser zoom
-        const zoomFactor = 0.1; // Smaller increment for smoother touchpad zoom
+        event.preventDefault();
+        const zoomFactor = 0.1;
 
         if (event.deltaY < 0) {
           // Zoom in
