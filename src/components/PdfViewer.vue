@@ -128,6 +128,14 @@ const renderPage = async (num) => {
     const viewport = page.getViewport({ scale: scale.value });
     canvas.height = viewport.height;
     canvas.width = viewport.width;
+
+    // Set the pdf-container size to match the canvas
+    const pdfContainerEl = pdfContainer.value;
+    if (pdfContainerEl) {
+      pdfContainerEl.style.width = viewport.width + 'px';
+      pdfContainerEl.style.height = viewport.height + 'px';
+    }
+
     const renderContext = { canvasContext: context, viewport: viewport, enableWebGL: false, renderInteractiveForms: false };
     if (currentRenderTask) {
       try { currentRenderTask.cancel(); } catch (e) {}
@@ -151,6 +159,7 @@ const renderPage = async (num) => {
   }
 };
 
+
 const renderTextLayer = async (page, viewport) => {
   const textLayerDiv = textLayer.value;
   if (!textLayerDiv) return;
@@ -159,8 +168,12 @@ const renderTextLayer = async (page, viewport) => {
   textLayerDiv.style.top = '0px';
   textLayerDiv.style.width = viewport.width + 'px';
   textLayerDiv.style.height = viewport.height + 'px';
+
   try {
     const textContent = await page.getTextContent();
+    const searchTerm = searchText.value?.toLowerCase();
+    const highlightAll = !!searchTerm && searchResult.value?.page === page;
+
     textContent.items.forEach((item) => {
       if (item.str && item.str.trim()) {
         const div = document.createElement('div');
@@ -173,6 +186,19 @@ const renderTextLayer = async (page, viewport) => {
         div.style.opacity = '0.2';
         div.style.color = 'transparent';
         div.style.cursor = 'text';
+        if (highlightAll && item.str.toLowerCase().includes(searchTerm)) {
+          const highlight = document.createElement('div');
+          highlight.style.position = 'absolute';
+          highlight.style.left = item.transform[4] + 'px';
+          highlight.style.top = (viewport.height - item.transform[5]) + 'px';
+          highlight.style.width = (Math.abs(item.transform[0]) * item.str.length * 0.6) + 'px';
+          highlight.style.height = Math.abs(item.transform[3]) + 'px';
+          highlight.style.backgroundColor = 'rgba(255, 255, 0, 0.6)';
+          highlight.style.borderRadius = '2px';
+          highlight.style.pointerEvents = 'none';
+          textLayerDiv.appendChild(highlight);
+        }
+
         textLayerDiv.appendChild(div);
       }
     });
@@ -180,6 +206,7 @@ const renderTextLayer = async (page, viewport) => {
     console.warn('Error rendering text layer:', error);
   }
 };
+
 
 const loadPdf = async () => {
   if (!props.pdfUrl) {
@@ -277,7 +304,10 @@ const zoomOut = async () => {
   }
 };
 
+const searchResult = ref(null); 
+
 const fullSearch = async () => {
+  searchResult.value = null;
   if (!searchText.value || !pdfDoc.value) return;
   loading.value = true;
   try {
@@ -285,11 +315,12 @@ const fullSearch = async () => {
       try {
         const page = await pdfDoc.value.getPage(i);
         const textContent = await page.getTextContent();
-        const text = textContent.items.map((item) => item.str).join(' ');
+        const viewport = page.getViewport({ scale: scale.value });
+        const text = textContent.items.map(item => item.str).join(' ');
         if (text.toLowerCase().includes(searchText.value.toLowerCase())) {
           pageNum.value = i;
+          searchResult.value = { page, textContent, viewport };
           await renderPage(i);
-          alert(`Text found on page ${i}`);
           return;
         }
       } catch (pageError) {
@@ -297,14 +328,16 @@ const fullSearch = async () => {
         continue;
       }
     }
-    alert('Text not found in document');
+    searchResult.value = null;
+    if (error.value) error.value = 'Text not found in document';
   } catch (error) {
     console.error('Error during search:', error);
-    alert('Error occurred during search');
+    error.value = 'Error occurred during search';
   } finally {
     loading.value = false;
   }
 };
+
 
 const downloadPdf = () => {
   if (!props.pdfUrl) return;
@@ -376,7 +409,7 @@ onBeforeUnmount(() => {
 }
 .controls button {
   padding: 5px 10px;
-  color: green;
+  color: #222;
   border: 1px solid #ccc;
   background: white;
   cursor: pointer;
@@ -397,19 +430,19 @@ onBeforeUnmount(() => {
 .main-container {
   display: flex;
   flex: 1;
-  overflow: hidden;
-  height: 60vh;
+  overflow: auto;
   border-top: 1px solid #fff;
 }
 .sidebar {
   width: 200px;
-  background: #fff;
+  background: #ddd;
   border-right: 1px solid #dee2e6;
   padding: 15px;
   overflow-y: auto;
 }
 .sidebar h4 {
   margin: 0 0 10px 0;
+  color: #444;
 }
 .sidebar ul {
   list-style: none;
@@ -433,14 +466,14 @@ onBeforeUnmount(() => {
   background: #e9e9e9;
 }
 .pdf-container {
-  flex: 1;
   position: relative;
-  overflow: auto;
-  background: #000;
+  background: #555;
   display: flex;
   justify-content: center;
   align-items: flex-start;
-  padding: 20px;
+  padding: 0; /* Remove padding to fit canvas exactly */
+  margin: auto; /* Center the container */
+  box-sizing: border-box;
 }
 .pdf-container canvas {
   background: white;
