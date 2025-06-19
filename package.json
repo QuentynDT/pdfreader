@@ -9,8 +9,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "pdfjs-dist": "^5.3.31",
     "vue": "^3.4.21",
-    "vue-pdf-embed": "^2.0.0"
+    "vue-pdf-embed": "^2.1.2"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.4",

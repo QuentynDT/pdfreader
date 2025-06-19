@@ -1,138 +1,484 @@
 <template>
-  <div class="pdf-viewer-container" @wheel="handleWheelZoom">
-    <div v-if="loading" class="message-text">
-      Loading PDF...
+  <div class="card">
+    <div class="controls">
+      <button @click="prevPage" :disabled="pageNum <= 1">⬅ Prev</button>
+      <span>Page {{ pageNum }} / {{ numPages }}</span>
+      <button @click="nextPage" :disabled="pageNum >= numPages">Next ➡</button>
+      <button @click="zoomOut" :disabled="scale <= 0.5">🔍 -</button>
+      <button @click="zoomIn">🔍 +</button>
+      <input
+        type="text"
+        v-model="searchText"
+        @keyup.enter="fullSearch"
+        placeholder="Search in PDF"
+      />
+      <button @click="fullSearch" :disabled="!searchText">Search</button>
+      <button @click="downloadPdf" :disabled="!pdfUrl">⬇ Download</button>
     </div>
-    <div v-if="error" class="message-text error-message">
-      Error loading PDF: {{ error.message }}
+    <div class="main-container">
+      <div class="sidebar" v-if="outline.length">
+        <h4>Bookmarks</h4>
+        <ul>
+          <li v-for="(item, index) in outline" :key="index">
+            <button @click="goToOutline(item)">{{ item.title }}</button>
+          </li>
+        </ul>
+      </div>
+      <div class="pdf-container" ref="pdfContainer">
+        <canvas ref="pdfCanvas"></canvas>
+        <div ref="textLayer" class="text-layer"></div>
+      </div>
     </div>
-    <pdf-embed
-      :source="pdfPath"
-      :scale="scale"
-      @rendered="handlePdfRendered"
-      @error="handlePdfError"
-      class="pdf-embed-element"
-    />
+    <div v-if="loading" class="loading">Loading PDF...</div>
+    <div v-if="error" class="error">{{ error }}</div>
   </div>
 </template>
-<script>
-import PdfEmbed from 'vue-pdf-embed';
-export default {
-  components: { PdfEmbed },
-  props: {
-    pdfPath: {
-      type: String,
-      required: true
-    }
-  },
-  data() {
-    return {
-      loading: true,
-      error: null,
-      scale: 1.0
-    };
-  },
-  methods: {
-    handlePdfRendered() {
-      this.loading = false;
-      this.error = null;
-      console.log('PDF successfully rendered!');
-    },
-    handlePdfError(event) {
-      this.loading = false;
-      this.error = event;
-      console.error('Failed to load PDF:', event);
-    },
-    zoomIn() {
-      console.log('Before zoomIn, scale:', this.scale);
-      this.scale = Math.min(this.scale + 0.25, 4.0);
-      console.log('After zoomIn, scale:', this.scale);
-    },
-    zoomOut() {
-      console.log('Before zoomOut, scale:', this.scale);
-      this.scale = Math.max(this.scale - 0.25, 0.25);
-      console.log('After zoomOut, scale:', this.scale);
-    },
-    handleWheelZoom(event) {
-      if (event.ctrlKey) {
-        event.preventDefault();
-        const zoomFactor = 0.1;
 
-        if (event.deltaY < 0) {
-          // Zoom in
-          this.scale = Math.min(this.scale + zoomFactor, 4.0);
-        } else {
-          // Zoom out
-          this.scale = Math.max(this.scale - zoomFactor, 0.25);
+<script setup>
+import { ref, onMounted, watch, nextTick, onBeforeUnmount } from 'vue';
+
+let PDFJS = null;
+let pdfjsInitialized = false;
+let currentRenderTask = null;
+const pageRendering = ref(false);
+const pageNumPending = ref(null);
+
+const initPDFJS = async () => {
+  if (pdfjsInitialized && PDFJS) return PDFJS;
+  try {
+    if (window.pdfjsLib) {
+      window.pdfjsLib = null;
+      delete window.pdfjsLib;
+    }
+    const scripts = document.querySelectorAll('script');
+    scripts.forEach(script => {
+      if (script.src && script.src.includes('pdf')) script.remove();
+    });
+    const script = document.createElement('script');
+    const timestamp = Date.now();
+    script.src = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.6.347/pdf.min.js?t=${timestamp}`;
+    script.type = 'text/javascript';
+    script.crossOrigin = 'anonymous';
+    document.head.appendChild(script);
+    await new Promise((resolve, reject) => {
+      script.onload = () => resolve();
+      script.onerror = (error) => reject(new Error('Failed to load PDF.js script'));
+      setTimeout(() => reject(new Error('PDF.js script load timeout')), 10000);
+    });
+    let attempts = 0;
+    while (!window.pdfjsLib && attempts < 50) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      attempts++;
+    }
+    if (!window.pdfjsLib) throw new Error('PDF.js library not available after loading');
+    PDFJS = window.pdfjsLib;
+    PDFJS.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.6.347/pdf.worker.min.js?t=${timestamp}`;
+    if (PDFJS.GlobalWorkerOptions) PDFJS.GlobalWorkerOptions.isEvalSupported = false;
+    pdfjsInitialized = true;
+    return PDFJS;
+  } catch (error) {
+    console.error('Failed to initialize PDF.js:', error);
+    pdfjsInitialized = false;
+    throw error;
+  }
+};
+
+const props = defineProps({ pdfUrl: { type: String, default: null } });
+const pdfDoc = ref(null);
+const pageNum = ref(1);
+const numPages = ref(0);
+const scale = ref(1.0);
+const searchText = ref('');
+const outline = ref([]);
+const loading = ref(false);
+const error = ref('');
+const pdfCanvas = ref(null);
+const textLayer = ref(null);
+const pdfContainer = ref(null);
+
+const renderPage = async (num) => {
+  if (pageRendering.value) {
+    pageNumPending.value = num;
+    return;
+  }
+  pageRendering.value = true;
+  try {
+    if (!pdfDoc.value) throw new Error('PDF document not loaded');
+    if (num < 1 || num > numPages.value) throw new Error(`Invalid page number: ${num}`);
+    error.value = '';
+    const canvas = pdfCanvas.value;
+    if (!canvas) throw new Error('Canvas element not found');
+    const context = canvas.getContext('2d');
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    let page;
+    try {
+      const pagePromise = pdfDoc.value.getPage(num);
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Page load timeout')), 5000));
+      page = await Promise.race([pagePromise, timeoutPromise]);
+      if (!page) throw new Error('Page is null');
+    } catch (pageError) {
+      console.error('Error getting page:', pageError);
+      if (pageError.message && pageError.message.includes('private member')) {
+        error.value = 'PDF rendering error detected. Attempting to reload...';
+        setTimeout(() => loadPdf(), 1000);
+        return;
+      }
+      throw pageError;
+    }
+    const viewport = page.getViewport({ scale: scale.value });
+    canvas.height = viewport.height;
+    canvas.width = viewport.width;
+    const renderContext = { canvasContext: context, viewport: viewport, enableWebGL: false, renderInteractiveForms: false };
+    if (currentRenderTask) {
+      try { currentRenderTask.cancel(); } catch (e) {}
+      currentRenderTask = null;
+    }
+    currentRenderTask = page.render(renderContext);
+    await currentRenderTask.promise;
+    currentRenderTask = null;
+    await renderTextLayer(page, viewport);
+  } catch (renderError) {
+    console.error('Error rendering page:', renderError);
+    if (renderError.name === 'RenderingCancelledException') return;
+    error.value = `Error rendering page ${num}: ${renderError.message}`;
+  } finally {
+    pageRendering.value = false;
+    if (pageNumPending.value !== null) {
+      const nextPage = pageNumPending.value;
+      pageNumPending.value = null;
+      renderPage(nextPage);
+    }
+  }
+};
+
+const renderTextLayer = async (page, viewport) => {
+  const textLayerDiv = textLayer.value;
+  if (!textLayerDiv) return;
+  textLayerDiv.innerHTML = '';
+  textLayerDiv.style.left = '0px';
+  textLayerDiv.style.top = '0px';
+  textLayerDiv.style.width = viewport.width + 'px';
+  textLayerDiv.style.height = viewport.height + 'px';
+  try {
+    const textContent = await page.getTextContent();
+    textContent.items.forEach((item) => {
+      if (item.str && item.str.trim()) {
+        const div = document.createElement('div');
+        div.textContent = item.str;
+        div.style.position = 'absolute';
+        div.style.left = item.transform[4] + 'px';
+        div.style.top = (viewport.height - item.transform[5]) + 'px';
+        div.style.fontSize = Math.abs(item.transform[0]) + 'px';
+        div.style.fontFamily = item.fontName || 'sans-serif';
+        div.style.opacity = '0.2';
+        div.style.color = 'transparent';
+        div.style.cursor = 'text';
+        textLayerDiv.appendChild(div);
+      }
+    });
+  } catch (error) {
+    console.warn('Error rendering text layer:', error);
+  }
+};
+
+const loadPdf = async () => {
+  if (!props.pdfUrl) {
+    pdfDoc.value = null;
+    numPages.value = 0;
+    pageNum.value = 1;
+    outline.value = [];
+    error.value = '';
+    return;
+  }
+  loading.value = true;
+  error.value = '';
+  try {
+    const pdfjsLib = await initPDFJS();
+    if (!pdfjsLib) throw new Error('PDF.js library failed to initialize');
+    let documentSource;
+    if (props.pdfUrl.startsWith('blob:')) {
+      const response = await fetch(props.pdfUrl);
+      if (!response.ok) throw new Error(`Failed to fetch PDF: ${response.status}`);
+      const arrayBuffer = await response.arrayBuffer();
+      documentSource = { data: new Uint8Array(arrayBuffer) };
+    } else {
+      documentSource = { url: props.pdfUrl };
+    }
+    const loadingOptions = {
+      ...documentSource,
+      verbosity: 0,
+      disableAutoFetch: true,
+      disableStream: true,
+      disableRange: true,
+      stopAtErrors: false
+    };
+    const loadingTask = pdfjsLib.getDocument(loadingOptions);
+    loadingTask.onProgress = (progressData) => {
+      if (progressData.total) {
+        const percent = Math.round((progressData.loaded / progressData.total) * 100);
+        console.log(`Loading progress: ${percent}%`);
+      }
+    };
+    const pdf = await loadingTask.promise;
+    if (!pdf || !pdf.numPages) throw new Error('Invalid PDF document');
+    pdfDoc.value = pdf;
+    numPages.value = pdf.numPages;
+    try {
+      const outlineData = await pdf.getOutline();
+      outline.value = outlineData || [];
+    } catch (outlineError) {
+      console.warn('Could not load outline:', outlineError);
+      outline.value = [];
+    }
+    pageNum.value = 1;
+    await nextTick();
+    setTimeout(async () => {
+      try { await renderPage(1); } catch (renderError) {
+        console.error('Error rendering first page:', renderError);
+        error.value = `Error rendering first page: ${renderError.message}`;
+      }
+    }, 500);
+  } catch (err) {
+    console.error('Error loading PDF:', err);
+    let errorMessage = 'Failed to load PDF';
+    if (err.name === 'InvalidPDFException') errorMessage = 'Invalid PDF file';
+    else if (err.name === 'MissingPDFException') errorMessage = 'PDF file not found';
+    else if (err.name === 'PasswordException') errorMessage = 'Password protected PDF';
+    else if (err.message) errorMessage = err.message;
+    error.value = errorMessage;
+  } finally {
+    loading.value = false;
+  }
+};
+
+const nextPage = async () => {
+  if (pageNum.value < numPages.value) {
+    pageNum.value++;
+    await renderPage(pageNum.value);
+  }
+};
+
+const prevPage = async () => {
+  if (pageNum.value > 1) {
+    pageNum.value--;
+    await renderPage(pageNum.value);
+  }
+};
+
+const zoomIn = async () => {
+  scale.value += 0.25;
+  await renderPage(pageNum.value);
+};
+
+const zoomOut = async () => {
+  if (scale.value > 0.5) {
+    scale.value -= 0.25;
+    await renderPage(pageNum.value);
+  }
+};
+
+const fullSearch = async () => {
+  if (!searchText.value || !pdfDoc.value) return;
+  loading.value = true;
+  try {
+    for (let i = 1; i <= numPages.value; i++) {
+      try {
+        const page = await pdfDoc.value.getPage(i);
+        const textContent = await page.getTextContent();
+        const text = textContent.items.map((item) => item.str).join(' ');
+        if (text.toLowerCase().includes(searchText.value.toLowerCase())) {
+          pageNum.value = i;
+          await renderPage(i);
+          alert(`Text found on page ${i}`);
+          return;
         }
-        console.log('Touchpad zoom, new scale:', this.scale);
+      } catch (pageError) {
+        console.warn(`Error searching page ${i}:`, pageError);
+        continue;
       }
     }
-  },
-  mounted() {
-    console.log('PdfViewer mounted with path:', this.pdfPath);
-    console.log('Initial scale on mount:', this.scale);
+    alert('Text not found in document');
+  } catch (error) {
+    console.error('Error during search:', error);
+    alert('Error occurred during search');
+  } finally {
+    loading.value = false;
   }
-}
+};
+
+const downloadPdf = () => {
+  if (!props.pdfUrl) return;
+  const link = document.createElement('a');
+  link.href = props.pdfUrl;
+  link.download = `downloaded_pdf_${Date.now()}.pdf`;
+  link.target = '_blank';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+};
+
+const goToOutline = async (item) => {
+  if (!pdfDoc.value || !item.dest) return;
+  try {
+    let dest = item.dest;
+    if (typeof dest === 'string') dest = await pdfDoc.value.getDestination(dest);
+    if (dest && dest.length > 0) {
+      const pageIndex = await pdfDoc.value.getPageIndex(dest[0]);
+      pageNum.value = pageIndex + 1;
+      await renderPage(pageNum.value);
+    }
+  } catch (error) {
+    console.error('Error navigating to outline:', error);
+  }
+};
+
+watch(() => props.pdfUrl, (newUrl, oldUrl) => {
+  if (newUrl !== oldUrl) loadPdf();
+}, { immediate: true });
+
+watch(scale, async () => {
+  if (pdfDoc.value && pageNum.value) await renderPage(pageNum.value);
+});
+
+onMounted(async () => {
+  try {
+    await initPDFJS();
+    if (props.pdfUrl) await loadPdf();
+  } catch (error) {
+    error.value = 'Failed to initialize PDF.js library';
+    console.error('PDF.js initialization error:', error);
+  }
+});
+
+onBeforeUnmount(() => {
+  if (currentRenderTask) {
+    try { currentRenderTask.cancel(); } catch (e) {}
+    currentRenderTask = null;
+  }
+});
 </script>
 
-<style scoped>
-.pdf-viewer-container {
-  min-height: 400px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
+<style>
+.card {
+  background: #fff;
   border-radius: 0.5rem;
-  box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.06);
-  background-color: #f9fafb;
-  padding: 0.5rem;
+  overflow: hidden;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
-
-.zoom-controls {
+.controls {
+  display: flex;
+  gap: 10px;
+  padding: 15px;
+  background: #555;
+  border-bottom: 1px solid #fff;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.controls button {
+  padding: 5px 10px;
+  color: green;
+  border: 1px solid #ccc;
+  background: white;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.controls button:hover:not(:disabled) {
+  background: #e9e9e9;
+}
+.controls button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.controls input {
+  padding: 5px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+}
+.main-container {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  height: 60vh;
+  border-top: 1px solid #fff;
+}
+.sidebar {
+  width: 200px;
+  background: #fff;
+  border-right: 1px solid #dee2e6;
+  padding: 15px;
+  overflow-y: auto;
+}
+.sidebar h4 {
+  margin: 0 0 10px 0;
+}
+.sidebar ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.sidebar li {
+  margin-bottom: 5px;
+}
+.sidebar button {
+  width: 100%;
+  text-align: left;
+  padding: 4px 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  border-radius: 3px;
+  color: #0077cc;
+}
+.sidebar button:hover {
+  background: #e9e9e9;
+}
+.pdf-container {
+  flex: 1;
+  position: relative;
+  overflow: auto;
+  background: #000;
   display: flex;
   justify-content: center;
-  align-items: center;
-  gap: 1rem;
-  margin-bottom: 1rem;
+  align-items: flex-start;
+  padding: 20px;
 }
-
-.zoom-button {
-  background-color: #3b82f6;
-  color: #fff;
-  font-weight: 700;
-  padding: 0.5rem 1rem;
-  border-radius: 9999px;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-  transition: all 300ms ease-in-out;
-  border: none;
-  cursor: pointer;
+.pdf-container canvas {
+  background: white;
+  box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+  display: block;
+  margin: 0 auto;
 }
-
-.zoom-button:hover {
-  background-color: #2563eb;
+.text-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+  opacity: 0.2;
+  line-height: 1.0;
+  pointer-events: none;
 }
-
-.zoom-percentage {
-  font-size: 1.125rem;
-  font-weight: 600;
-  color: #000;
+.text-layer > div {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
 }
-
-.message-text {
+.loading, .error {
+  padding: 20px;
   text-align: center;
-  color: #4b5563;
-  padding: 2rem;
+  font-size: 16px;
 }
-
-.error-message {
-  color: #ef4444;
+.error {
+  color: red;
+  background: #ffe6e6;
+  border: 1px solid #ffcccc;
+  border-radius: 4px;
+  margin: 10px;
 }
-
-.pdf-embed-element {
-  border-radius: 0.375rem;
-  width: 100%;
-  height: auto;
-  max-width: 100%;
+.loading {
+  color: #666;
 }
 </style>

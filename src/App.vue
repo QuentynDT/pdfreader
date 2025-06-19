@@ -1,72 +1,32 @@
 <template>
   <div class="app-container">
     <div class="white-card">
-      <h1 class="main-title">
-        PDF Viewer
-      </h1>
-      <div class="input-section">
-        <label for="pdfUpload" class="file-label">
-          Choose a PDF File:
-        </label>
-        <input
-          type="file"
-          id="pdfUpload"
-          ref="pdfFileInput"
-          @change="handleFileChange"
-          accept="application/pdf"
-          class="file-input"
-        />
-        <p class="file-info-text">
-          Select a PDF file from your computer to view it below.
-        </p>
-      </div>
-
-      <div v-if="selectedPdfUrl">
-        <PdfViewer :pdfPath="selectedPdfUrl" />
-      </div>
-      <div v-else class="placeholder-message">
-        Please select a PDF file to display.
-      </div>
+      <header class="app-header">
+        <h1 class="main-title">PDF Viewer App</h1>
+      </header>
+      <main class="app-main">
+        <PdfInput @pdf-selected="handlePdfSelected" />
+        <div v-if="selectedPdfUrl" class="pdf-viewer-container">
+          <PdfViewer :pdfUrl="selectedPdfUrl" />
+        </div>
+        <div v-else class="no-pdf-message">
+          <p>No PDF selected. Please choose a PDF file to view.</p>
+        </div>
+      </main>
     </div>
   </div>
 </template>
 
-<script>
+<script setup>
+import { ref } from 'vue';
+import PdfInput from './components/PdfInput.vue';
 import PdfViewer from './components/PdfViewer.vue';
 
-export default {
-  components: {
-    PdfViewer
-  },
-  data() {
-    return {
-      selectedPdfUrl: null
-    };
-  },
-  methods: {
-    handleFileChange(event) {
-      const file = event.target.files[0];
+const selectedPdfUrl = ref(null);
 
-      if (file && file.type === 'application/pdf') {
-        if (this.selectedPdfUrl) {
-          URL.revokeObjectURL(this.selectedPdfUrl);
-        }
-        this.selectedPdfUrl = URL.createObjectURL(file);
-      } else {
-        if (this.selectedPdfUrl) {
-          URL.revokeObjectURL(this.selectedPdfUrl);
-        }
-        this.selectedPdfUrl = null;
-        console.warn("Please select a valid PDF file.");
-      }
-    }
-  },
-  beforeUnmount() {
-    if (this.selectedPdfUrl) {
-      URL.revokeObjectURL(this.selectedPdfUrl);
-    }
-  }
-}
+const handlePdfSelected = (pdfUrl) => {
+  selectedPdfUrl.value = pdfUrl;
+};
 </script>
 
 <style>
@@ -75,88 +35,60 @@ body {
   font-family: "Inter", sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  background-color: #000033;
 }
-
 .app-container {
   padding: 1rem;
-  background-color: transparent;
   min-height: 100vh;
-  font-family: "Inter", sans-serif;
   display: flex;
   justify-content: center;
   align-items: flex-start;
 }
-
 .white-card {
   max-width: 56rem;
-  margin-left: auto;
-  margin-right: auto;
+  margin: auto;
   background-color: #fff;
   box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
   border-radius: 0.5rem;
-  overflow: hidden;
   padding: 1.5rem;
   width: 100%;
 }
-
+.app-header {
+  text-align: center;
+  padding: 1rem;
+}
 .main-title {
   font-size: 1.875rem;
   font-weight: 700;
-  text-align: center;
-  margin-bottom: 1.5rem;
   color: #1f2937;
-}
-
-.input-section {
   margin-bottom: 1.5rem;
 }
-
-.file-label {
-  display: block;
-  font-size: 1.125rem;
-  font-weight: 500;
-  color: #374151;
-  margin-bottom: 0.5rem;
+.app-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
 }
-
-.file-input {
-  display: block;
+.pdf-viewer-container {
+  flex: 1;
+  min-height: 400px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  border-radius: 0.5rem;
+  background-color: #fff;
   width: 100%;
-  font-size: 0.875rem;
-  color: #6b7280;
-  cursor: pointer;
-  border-radius: 0.5rem;
-  border: 1px solid #d1d5db;
-  padding: 0.5rem;
+  overflow: hidden;
+  box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.06);
 }
-
-.file-input::-webkit-file-upload-button {
-  margin-right: 1rem;
-  padding: 0.5rem 1rem;
-  border-radius: 9999px;
-  border: none;
-  font-size: 0.875rem;
-  font-weight: 600;
-  background-color: #eff6ff;
-  color: #1d4ed8;
-  transition: background-color 0.15s ease-in-out;
-}
-
-.file-input::-webkit-file-upload-button:hover {
-  background-color: #dbeafe;
-}
-
-.file-info-text {
-  font-size: 0.875rem;
-  color: #6b7280;
-  margin-top: 0.5rem;
-}
-
-.placeholder-message {
+.no-pdf-message {
+  padding: 3rem;
   text-align: center;
-  color: #4b5563;
-  padding: 2rem;
-  border: 1px dashed #d1d5db;
+  color: #666;
+  font-size: 1.1rem;
+  background: #f8f9fa;
   border-radius: 0.5rem;
+  margin-top: 1rem;
+  border: 1px dashed #dee2e6;
 }
 </style>
