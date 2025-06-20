@@ -128,8 +128,6 @@ const renderPage = async (num) => {
     const viewport = page.getViewport({ scale: scale.value });
     canvas.height = viewport.height;
     canvas.width = viewport.width;
-
-    // Set the pdf-container size to match the canvas
     const pdfContainerEl = pdfContainer.value;
     if (pdfContainerEl) {
       pdfContainerEl.style.width = viewport.width + 'px';
@@ -408,6 +406,7 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
 }
 .controls button {
+  height: 34px;
   padding: 5px 10px;
   color: #222;
   border: 1px solid #ccc;
@@ -471,8 +470,8 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: center;
   align-items: flex-start;
-  padding: 0; /* Remove padding to fit canvas exactly */
-  margin: auto; /* Center the container */
+  padding: 0;
+  margin: auto;
   box-sizing: border-box;
 }
 .pdf-container canvas {
