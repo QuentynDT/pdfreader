@@ -175,6 +175,10 @@ const renderTextLayer = async (page, viewport) => {
     const textContent = await page.getTextContent();
     const searchTerm = searchText.value?.toLowerCase();
 
+    // Create a temporary canvas for text measurement
+    const measureCanvas = document.createElement('canvas');
+    const measureCtx = measureCanvas.getContext('2d');
+
     textContent.items.forEach((item) => {
       if (item.str && item.str.trim()) {
         const div = document.createElement('div');
@@ -188,22 +192,35 @@ const renderTextLayer = async (page, viewport) => {
         div.style.color = 'transparent';
         div.style.cursor = 'text';
         textLayerDiv.appendChild(div);
+        
         if (searchTerm) {
           const itemTextLower = item.str.toLowerCase();
           let index = itemTextLower.indexOf(searchTerm);
+          
           while (index >= 0) {
-            const substring = item.str.substring(index, index + searchTerm.length);
-            const substringWidth = (Math.abs(item.transform[0]) * substring.length * 0.6);
+            // Set font for accurate measurement
+            measureCtx.font = `${Math.abs(item.transform[0])}px ${item.fontName || 'sans-serif'}`;
+            
+            // Measure the text before the match to get accurate position
+            const textBefore = item.str.substring(0, index);
+            const textBeforeWidth = measureCtx.measureText(textBefore).width;
+            
+            // Measure the matched text to get accurate width
+            const matchedText = item.str.substring(index, index + searchTerm.length);
+            const matchedTextWidth = measureCtx.measureText(matchedText).width;
+            
             const highlight = document.createElement('div');
             highlight.style.position = 'absolute';
-            highlight.style.left = (item.transform[4] + index * Math.abs(item.transform[0]) * 0.43) + 'px';
-            highlight.style.top = (viewport.height - item.transform[5] - 13) + 'px';
-            highlight.style.width = substringWidth + 'px';
-            highlight.style.height = Math.abs(item.transform[3]) + 'px';
+            highlight.style.left = (item.transform[4] + textBeforeWidth) + 'px';
+            highlight.style.top = (viewport.height - item.transform[5] - Math.abs(item.transform[0])) + 'px';
+            highlight.style.width = matchedTextWidth + 'px';
+            highlight.style.height = Math.abs(item.transform[0]) + 'px';
             highlight.style.backgroundColor = 'rgba(255, 255, 0, 0.6)';
             highlight.style.borderRadius = '2px';
             highlight.style.pointerEvents = 'none';
+            highlight.style.zIndex = '1';
             textLayerDiv.appendChild(highlight);
+            
             index = itemTextLower.indexOf(searchTerm, index + 1);
           }
         }
@@ -213,7 +230,6 @@ const renderTextLayer = async (page, viewport) => {
     console.warn('Error rendering text layer:', error);
   }
 };
-
 
 const loadPdf = async () => {
   if (!props.pdfUrl) {
