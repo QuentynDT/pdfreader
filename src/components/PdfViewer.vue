@@ -13,6 +13,9 @@
         placeholder="Search in PDF"
       />
       <button @click="fullSearch" :disabled="!searchText">Search</button>
+      <button @click="prevMatch" :disabled="!allMatches.length || currentMatchIndex <= 0">⬅ Prev Match</button>
+      <button @click="nextMatch" :disabled="!allMatches.length || currentMatchIndex >= allMatches.length - 1">Next Match ➡</button>
+      <span v-if="allMatches.length">{{ currentMatchIndex + 1 }} / {{ allMatches.length }}</span>
       <button @click="downloadPdf" :disabled="!pdfUrl">⬇ Download</button>
     </div>
     <div class="main-container">
@@ -95,6 +98,8 @@ const error = ref('');
 const pdfCanvas = ref(null);
 const textLayer = ref(null);
 const pdfContainer = ref(null);
+const allMatches = ref([]);
+const currentMatchIndex = ref(0);
 
 const renderPage = async (num) => {
   if (pageRendering.value) {
@@ -157,7 +162,6 @@ const renderPage = async (num) => {
   }
 };
 
-
 const renderTextLayer = async (page, viewport) => {
   const textLayerDiv = textLayer.value;
   if (!textLayerDiv) return;
@@ -170,7 +174,6 @@ const renderTextLayer = async (page, viewport) => {
   try {
     const textContent = await page.getTextContent();
     const searchTerm = searchText.value?.toLowerCase();
-    const highlightAll = !!searchTerm && searchResult.value?.page === page;
 
     textContent.items.forEach((item) => {
       if (item.str && item.str.trim()) {
@@ -178,26 +181,32 @@ const renderTextLayer = async (page, viewport) => {
         div.textContent = item.str;
         div.style.position = 'absolute';
         div.style.left = item.transform[4] + 'px';
-        div.style.top = (viewport.height - item.transform[5]) + 'px';
+        div.style.top = (viewport.height - item.transform[5] - 13) + 'px';
         div.style.fontSize = Math.abs(item.transform[0]) + 'px';
         div.style.fontFamily = item.fontName || 'sans-serif';
         div.style.opacity = '0.2';
         div.style.color = 'transparent';
         div.style.cursor = 'text';
-        if (highlightAll && item.str.toLowerCase().includes(searchTerm)) {
-          const highlight = document.createElement('div');
-          highlight.style.position = 'absolute';
-          highlight.style.left = item.transform[4] + 'px';
-          highlight.style.top = (viewport.height - item.transform[5]) + 'px';
-          highlight.style.width = (Math.abs(item.transform[0]) * item.str.length * 0.6) + 'px';
-          highlight.style.height = Math.abs(item.transform[3]) + 'px';
-          highlight.style.backgroundColor = 'rgba(255, 255, 0, 0.6)';
-          highlight.style.borderRadius = '2px';
-          highlight.style.pointerEvents = 'none';
-          textLayerDiv.appendChild(highlight);
-        }
-
         textLayerDiv.appendChild(div);
+        if (searchTerm) {
+          const itemTextLower = item.str.toLowerCase();
+          let index = itemTextLower.indexOf(searchTerm);
+          while (index >= 0) {
+            const substring = item.str.substring(index, index + searchTerm.length);
+            const substringWidth = (Math.abs(item.transform[0]) * substring.length * 0.6);
+            const highlight = document.createElement('div');
+            highlight.style.position = 'absolute';
+            highlight.style.left = (item.transform[4] + index * Math.abs(item.transform[0]) * 0.43) + 'px';
+            highlight.style.top = (viewport.height - item.transform[5] - 13) + 'px';
+            highlight.style.width = substringWidth + 'px';
+            highlight.style.height = Math.abs(item.transform[3]) + 'px';
+            highlight.style.backgroundColor = 'rgba(255, 255, 0, 0.6)';
+            highlight.style.borderRadius = '2px';
+            highlight.style.pointerEvents = 'none';
+            textLayerDiv.appendChild(highlight);
+            index = itemTextLower.indexOf(searchTerm, index + 1);
+          }
+        }
       }
     });
   } catch (error) {
@@ -213,10 +222,14 @@ const loadPdf = async () => {
     pageNum.value = 1;
     outline.value = [];
     error.value = '';
+    allMatches.value = [];
+    currentMatchIndex.value = 0;
     return;
   }
   loading.value = true;
   error.value = '';
+  allMatches.value = [];
+  currentMatchIndex.value = 0;
   try {
     const pdfjsLib = await initPDFJS();
     if (!pdfjsLib) throw new Error('PDF.js library failed to initialize');
@@ -302,40 +315,86 @@ const zoomOut = async () => {
   }
 };
 
-const searchResult = ref(null); 
-
 const fullSearch = async () => {
-  searchResult.value = null;
+  allMatches.value = [];
+  currentMatchIndex.value = 0;
+  
   if (!searchText.value || !pdfDoc.value) return;
+  
   loading.value = true;
+  const term = searchText.value.toLowerCase();
+  const matches = [];
+
   try {
     for (let i = 1; i <= numPages.value; i++) {
-      try {
-        const page = await pdfDoc.value.getPage(i);
-        const textContent = await page.getTextContent();
-        const viewport = page.getViewport({ scale: scale.value });
-        const text = textContent.items.map(item => item.str).join(' ');
-        if (text.toLowerCase().includes(searchText.value.toLowerCase())) {
-          pageNum.value = i;
-          searchResult.value = { page, textContent, viewport };
-          await renderPage(i);
-          return;
-        }
-      } catch (pageError) {
-        console.warn(`Error searching page ${i}:`, pageError);
-        continue;
+      const page = await pdfDoc.value.getPage(i);
+      const textContent = await page.getTextContent();
+      const viewport = page.getViewport({ scale: 1.0 });
+      const text = textContent.items.map(item => item.str).join(' ');
+      const regex = new RegExp(term, 'gi');
+      let match;
+      while ((match = regex.exec(text)) !== null) {
+        const textBefore = text.substring(0, match.index);
+        const linesBefore = textBefore.split('\n');
+        const lineIndex = linesBefore.length - 1;
+        const lineOffset = linesBefore[linesBefore.length - 1].length;
+        const x = lineOffset * 8;
+        const y = lineIndex * 18;
+        
+        matches.push({
+          page: i,
+          index: match.index,
+          length: term.length,
+          x: x,
+          y: y,
+          width: term.length,
+          height: 16
+        });
       }
     }
-    searchResult.value = null;
-    if (error.value) error.value = 'Text not found in document';
-  } catch (error) {
-    console.error('Error during search:', error);
-    error.value = 'Error occurred during search';
+
+    if (matches.length) {
+      allMatches.value = matches;
+      currentMatchIndex.value = 0;
+      pageNum.value = matches[0].page;
+      await renderPage(pageNum.value);
+    } else {
+      error.value = 'Text not found in document';
+    }
+  } catch (err) {
+    error.value = 'Search error: ' + err.message;
   } finally {
     loading.value = false;
   }
 };
 
+const nextMatch = async () => {
+  if (!allMatches.value.length) return;
+  
+  let nextIndex = currentMatchIndex.value + 1;
+  if (nextIndex >= allMatches.value.length) {
+    nextIndex = 0;
+  }
+  
+  currentMatchIndex.value = nextIndex;
+  const match = allMatches.value[nextIndex];
+  pageNum.value = match.page;
+  await renderPage(match.page);
+};
+
+const prevMatch = async () => {
+  if (!allMatches.value.length) return;
+  
+  let prevIndex = currentMatchIndex.value - 1;
+  if (prevIndex < 0) {
+    prevIndex = allMatches.value.length - 1;
+  }
+  
+  currentMatchIndex.value = prevIndex;
+  const match = allMatches.value[prevIndex];
+  pageNum.value = match.page;
+  await renderPage(match.page);
+};
 
 const downloadPdf = () => {
   if (!props.pdfUrl) return;
