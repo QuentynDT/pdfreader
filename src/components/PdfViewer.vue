@@ -1,11 +1,11 @@
 <template>
   <div class="card">
     <div class="controls">
-      <button @click="prevPage" :disabled="pageNum <= 1">⬅ Prev</button>
+      <button @click="prevPage" :disabled="pageNum <= 1">Prev</button>
       <span>Page {{ pageNum }} / {{ numPages }}</span>
-      <button @click="nextPage" :disabled="pageNum >= numPages">Next ➡</button>
-      <button @click="zoomOut" :disabled="scale <= 0.5">🔍 -</button>
-      <button @click="zoomIn">🔍 +</button>
+      <button @click="nextPage" :disabled="pageNum >= numPages">Next</button>
+      <button @click="zoomOut" :disabled="scale <= 0.5">🔍-</button>
+      <button @click="zoomIn">🔍+</button>
       <input
         type="text"
         v-model="searchText"
@@ -13,10 +13,10 @@
         placeholder="Search in PDF"
       />
       <button @click="fullSearch" :disabled="!searchText">Search</button>
-      <button @click="prevMatch" :disabled="!allMatches.length || currentMatchIndex <= 0">⬅ Prev Match</button>
-      <button @click="nextMatch" :disabled="!allMatches.length || currentMatchIndex >= allMatches.length - 1">Next Match ➡</button>
+      <button @click="prevMatch" :disabled="!allMatches.length || currentMatchIndex <= 0">Prev</button>
+      <button @click="nextMatch" :disabled="!allMatches.length || currentMatchIndex >= allMatches.length - 1">Next</button>
       <span v-if="allMatches.length">{{ currentMatchIndex + 1 }} / {{ allMatches.length }}</span>
-      <button @click="downloadPdf" :disabled="!pdfUrl">⬇ Download</button>
+      <button @click="downloadPdf" :disabled="!pdfUrl">Download</button>
     </div>
     <div class="main-container">
       <div class="pdf-container" ref="pdfContainer">
@@ -50,23 +50,27 @@ const initPDFJS = async () => {
     scripts.forEach(script => {
       if (script.src && script.src.includes('pdf')) script.remove();
     });
+
     const script = document.createElement('script');
     const timestamp = Date.now();
     script.src = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.6.347/pdf.min.js?t=${timestamp}`;
     script.type = 'text/javascript';
     script.crossOrigin = 'anonymous';
     document.head.appendChild(script);
+
     await new Promise((resolve, reject) => {
       script.onload = () => resolve();
       script.onerror = (error) => reject(new Error('Failed to load PDF.js script'));
       setTimeout(() => reject(new Error('PDF.js script load timeout')), 10000);
     });
+
     let attempts = 0;
     while (!window.pdfjsLib && attempts < 50) {
       await new Promise(resolve => setTimeout(resolve, 100));
       attempts++;
     }
     if (!window.pdfjsLib) throw new Error('PDF.js library not available after loading');
+
     PDFJS = window.pdfjsLib;
     PDFJS.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.6.347/pdf.worker.min.js?t=${timestamp}`;
     if (PDFJS.GlobalWorkerOptions) PDFJS.GlobalWorkerOptions.isEvalSupported = false;
@@ -80,6 +84,7 @@ const initPDFJS = async () => {
 };
 
 const props = defineProps({ pdfUrl: { type: String, default: null } });
+
 const pdfDoc = ref(null);
 const pageNum = ref(1);
 const numPages = ref(0);
@@ -93,7 +98,6 @@ const pdfContainer = ref(null);
 const allMatches = ref([]);
 const currentMatchIndex = ref(0);
 
-
 const renderPage = async (num) => {
   if (pageRendering.value) {
     pageNumPending.value = num;
@@ -103,11 +107,13 @@ const renderPage = async (num) => {
   try {
     if (!pdfDoc.value) throw new Error('PDF document not loaded');
     if (num < 1 || num > numPages.value) throw new Error(`Invalid page number: ${num}`);
+
     error.value = '';
     const canvas = pdfCanvas.value;
     if (!canvas) throw new Error('Canvas element not found');
     const context = canvas.getContext('2d');
     context.clearRect(0, 0, canvas.width, canvas.height);
+
     let page;
     try {
       const pagePromise = pdfDoc.value.getPage(num);
@@ -123,18 +129,22 @@ const renderPage = async (num) => {
       }
       throw pageError;
     }
+
     const viewport = page.getViewport({ scale: scale.value });
     canvas.height = viewport.height;
     canvas.width = viewport.width;
 
     const renderContext = { canvasContext: context, viewport: viewport, enableWebGL: false, renderInteractiveForms: false };
+
     if (currentRenderTask) {
-      try { currentRenderTask.cancel(); } catch (e) {}
+      try { currentRenderTask.cancel(); } catch (e) { }
       currentRenderTask = null;
     }
+    
     currentRenderTask = page.render(renderContext);
     await currentRenderTask.promise;
     currentRenderTask = null;
+
     await renderTextLayer(page, viewport);
   } catch (renderError) {
     console.error('Error rendering page:', renderError);
@@ -150,35 +160,36 @@ const renderPage = async (num) => {
   }
 };
 
-
 const renderTextLayer = async (page, viewport) => {
   const textLayerDiv = textLayer.value;
   if (!textLayerDiv) return;
+
   textLayerDiv.innerHTML = '';
   textLayerDiv.style.left = '0px';
   textLayerDiv.style.top = '0px';
   textLayerDiv.style.width = `${viewport.width}px`;
   textLayerDiv.style.height = `${viewport.height}px`;
+
   try {
     const textContent = await page.getTextContent();
     const searchTerm = searchText.value?.toLowerCase();
-    const scaleFactor = scale.value;
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
 
-    const pageMatches = allMatches.value.filter(m => m.page === pageNum.value);
+    for (let i = 0; i < textContent.items.length; i++) {
+      const item = textContent.items[i];
 
-    let matchCountOnPage = 0;
+      const transform = PDFJS.Util.transform(viewport.transform, item.transform);
 
-    for (const item of textContent.items) {
-      const fontSize = Math.abs(item.transform[0]) * scaleFactor;
-      const x = item.transform[4] * scaleFactor;
-      const y = (viewport.height - item.transform[5]) * scaleFactor;
+      const x = transform[4];
+      const y_baseline_from_top = transform[5]; 
+      const fontSize = Math.sqrt(transform[0] * transform[0] + transform[1] * transform[1]);
+
+      const textBlockTop = y_baseline_from_top - fontSize; 
+
       const textDiv = document.createElement('div');
       textDiv.textContent = item.str;
       textDiv.style.position = 'absolute';
       textDiv.style.left = `${x}px`;
-      textDiv.style.top = `${y - fontSize}px`;
+      textDiv.style.top = `${textBlockTop}px`;
       textDiv.style.fontSize = `${fontSize}px`;
       textDiv.style.fontFamily = item.fontName || 'sans-serif';
       textDiv.style.whiteSpace = 'pre';
@@ -186,20 +197,25 @@ const renderTextLayer = async (page, viewport) => {
       textDiv.style.pointerEvents = 'none';
       textLayerDiv.appendChild(textDiv);
 
-      if (searchTerm) {
+      if (searchTerm && searchTerm.length > 0) {
         const itemText = item.str.toLowerCase();
         let matchIndex = itemText.indexOf(searchTerm);
+        
+        const dummyCanvas = document.createElement('canvas');
+        const ctx = dummyCanvas.getContext('2d');
+        ctx.font = `${fontSize}px ${item.fontName || 'sans-serif'}`;
+
         while (matchIndex !== -1) {
-          ctx.font = `${fontSize}px ${item.fontName || 'sans-serif'}`;
           const textBefore = item.str.slice(0, matchIndex);
           const matchText = item.str.slice(matchIndex, matchIndex + searchTerm.length);
+
           const leftOffset = ctx.measureText(textBefore).width;
           const matchWidth = ctx.measureText(matchText).width;
-          
+
           const highlight = document.createElement('div');
           highlight.style.position = 'absolute';
           highlight.style.left = `${x + leftOffset}px`;
-          highlight.style.top = `${y - fontSize}px`;
+          highlight.style.top = `${textBlockTop + 2}px`;
           highlight.style.width = `${matchWidth}px`;
           highlight.style.height = `${fontSize}px`;
           highlight.style.pointerEvents = 'none';
@@ -207,18 +223,17 @@ const renderTextLayer = async (page, viewport) => {
 
           const matchGlobalIndex = allMatches.value.findIndex(m =>
             m.page === pageNum.value &&
-            m.itemIndex === textContent.items.indexOf(item) &&
+            m.itemIndex === i &&
             m.charOffset === matchIndex
           );
 
           if (matchGlobalIndex === currentMatchIndex.value && pageNum.value === allMatches.value[currentMatchIndex.value]?.page) {
-            highlight.style.backgroundColor = 'rgba(0, 255, 0, 0.5)'; // Green for current match
+            highlight.style.backgroundColor = 'rgba(0, 255, 0, 0.5)';
+            highlight.classList.add('current-highlight');
           } else if (matchGlobalIndex !== -1) {
-            highlight.style.backgroundColor = 'rgba(255, 255, 0, 0.5)'; // Yellow for all matches
+            highlight.style.backgroundColor = 'rgba(255, 255, 0, 0.5)';
           } else {
-            // If it's a match but not tracked in allMatches (e.g., initial search without fullMatch logic), 
-            // it still gets yellow if we want all current page matches highlighted.
-             highlight.style.backgroundColor = 'rgba(255, 255, 0, 0.5)'; // Yellow for all matches
+            highlight.style.backgroundColor = 'rgba(255, 255, 0, 0.5)';
           }
           
           textLayerDiv.appendChild(highlight);
@@ -231,7 +246,6 @@ const renderTextLayer = async (page, viewport) => {
   }
 };
 
-
 const loadPdf = async () => {
   if (!props.pdfUrl) {
     pdfDoc.value = null;
@@ -242,13 +256,16 @@ const loadPdf = async () => {
     currentMatchIndex.value = 0;
     return;
   }
+
   loading.value = true;
   error.value = '';
   allMatches.value = [];
   currentMatchIndex.value = 0;
+
   try {
     const pdfjsLib = await initPDFJS();
     if (!pdfjsLib) throw new Error('PDF.js library failed to initialize');
+
     let documentSource;
     if (props.pdfUrl.startsWith('blob:')) {
       const response = await fetch(props.pdfUrl);
@@ -258,6 +275,7 @@ const loadPdf = async () => {
     } else {
       documentSource = { url: props.pdfUrl };
     }
+
     const loadingOptions = {
       ...documentSource,
       verbosity: 0,
@@ -266,6 +284,7 @@ const loadPdf = async () => {
       disableRange: true,
       stopAtErrors: false
     };
+
     const loadingTask = pdfjsLib.getDocument(loadingOptions);
     loadingTask.onProgress = (progressData) => {
       if (progressData.total) {
@@ -273,11 +292,14 @@ const loadPdf = async () => {
         console.log(`Loading progress: ${percent}%`);
       }
     };
+
     const pdf = await loadingTask.promise;
     if (!pdf || !pdf.numPages) throw new Error('Invalid PDF document');
+
     pdfDoc.value = pdf;
     numPages.value = pdf.numPages;
     pageNum.value = 1;
+
     await nextTick();
     setTimeout(async () => {
       try { await renderPage(1); } catch (renderError) {
@@ -285,6 +307,7 @@ const loadPdf = async () => {
         error.value = `Error rendering first page: ${renderError.message}`;
       }
     }, 500);
+
   } catch (err) {
     console.error('Error loading PDF:', err);
     let errorMessage = 'Failed to load PDF';
@@ -344,12 +367,11 @@ const fullSearch = async () => {
         const itemText = item.str.toLowerCase();
         let matchIndex = itemText.indexOf(term);
         while (matchIndex !== -1) {
-          // Store page number, item index (to locate the text block), and character offset
           matches.push({
             page: i,
             itemIndex: j,
             charOffset: matchIndex,
-            str: item.str.substring(matchIndex, matchIndex + term.length) // Store the actual matched string for debugging if needed
+            str: item.str.substring(matchIndex, matchIndex + term.length)
           });
           matchIndex = itemText.indexOf(term, matchIndex + term.length);
         }
@@ -361,6 +383,7 @@ const fullSearch = async () => {
       currentMatchIndex.value = 0;
       pageNum.value = matches[0].page;
       await renderPage(pageNum.value);
+      scrollToMatch();
     } else {
       error.value = 'Text not found in document';
     }
@@ -376,16 +399,16 @@ const nextMatch = async () => {
 
   let nextIndex = currentMatchIndex.value + 1;
   if (nextIndex >= allMatches.value.length) {
-    nextIndex = 0; // Wrap around to the first match
+    nextIndex = 0;
   }
 
   currentMatchIndex.value = nextIndex;
   const match = allMatches.value[nextIndex];
+
   if (pageNum.value !== match.page) {
     pageNum.value = match.page;
     await renderPage(match.page);
   } else {
-    // If on the same page, just re-render to update highlights
     await renderPage(pageNum.value);
   }
   scrollToMatch();
@@ -396,16 +419,16 @@ const prevMatch = async () => {
 
   let prevIndex = currentMatchIndex.value - 1;
   if (prevIndex < 0) {
-    prevIndex = allMatches.value.length - 1; // Wrap around to the last match
+    prevIndex = allMatches.value.length - 1;
   }
 
   currentMatchIndex.value = prevIndex;
   const match = allMatches.value[prevIndex];
+
   if (pageNum.value !== match.page) {
     pageNum.value = match.page;
     await renderPage(match.page);
   } else {
-    // If on the same page, just re-render to update highlights
     await renderPage(pageNum.value);
   }
   scrollToMatch();
@@ -414,55 +437,10 @@ const prevMatch = async () => {
 const scrollToMatch = () => {
   if (!allMatches.value.length || !pdfContainer.value || !textLayer.value) return;
 
-  const match = allMatches.value[currentMatchIndex.value];
-  if (match.page !== pageNum.value) return; // Only scroll if the match is on the current page
-
-  const textLayerDiv = textLayer.value;
-  const highlightElements = textLayerDiv.querySelectorAll('div[style*="background-color"]');
-
-  // Find the specific highlight element that corresponds to the current match
-  // This is a bit tricky since we don't have unique IDs for highlights,
-  // so we'll rely on the order they were created and the current match index.
-  // A more robust solution might involve adding data attributes to highlights.
-  let currentHighlight = null;
-  let highlightCount = 0;
-
-  for (const item of textLayerDiv.children) {
-    if (item.style.backgroundColor.includes('rgba')) { // Check if it's a highlight div
-      if (highlightCount === currentMatchIndex.value) { // This is a rough estimation; actual match order might vary.
-        currentHighlight = item;
-        break;
-      }
-      highlightCount++;
-    }
-  }
-
-
-  // A more reliable way would be to pass the exact bounding box from `fullSearch`
-  // and use that to identify the correct highlight element, or create unique IDs.
-
-  // For simplicity, let's assume the highlights are created in the same order as `allMatches`.
-  // The `renderTextLayer` creates highlights. We need to find the one corresponding to `currentMatchIndex`.
-  // This part needs careful alignment between `renderTextLayer` and `scrollToMatch`.
-  
-  // A better approach would be to store the exact coordinates (x, y, width, height) of the highlight
-  // in the `allMatches` array during `fullSearch` and `renderTextLayer`.
-  // For now, let's just make sure the current match is roughly visible.
-
-  // We need to re-think how `allMatches` is populated to include more granular information
-  // or how `renderTextLayer` marks the highlights to be uniquely identifiable.
-
-  // For the current structure, let's simply scroll to the approximate center if the page has changed.
-  // The visual highlight will already be there.
-
-  // If you want a more precise scroll, you'd need to calculate the bounding box of the specific
-  // highlighted text within the `textLayerDiv` and scroll that into view.
-  // This often involves getting the `getBoundingClientRect()` of the highlight element.
-
-  // Since we don't have unique IDs for each highlight div yet, let's try to get
-  // the current green-highlighted element after re-rendering.
   nextTick(() => {
-    const greenHighlight = textLayerDiv.querySelector('div[style*="rgba(0, 255, 0"]');
+    const textLayerDiv = textLayer.value;
+    const greenHighlight = textLayerDiv.querySelector('.current-highlight'); 
+    
     if (greenHighlight) {
       const pdfContainerRect = pdfContainer.value.getBoundingClientRect();
       const highlightRect = greenHighlight.getBoundingClientRect();
@@ -478,7 +456,6 @@ const scrollToMatch = () => {
     }
   });
 };
-
 
 const downloadPdf = () => {
   if (!props.pdfUrl) return;
@@ -523,7 +500,11 @@ onBeforeUnmount(() => {
   border-radius: 0.5rem;
   overflow: hidden;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
 }
+
 .controls {
   display: flex;
   gap: 10px;
@@ -532,7 +513,9 @@ onBeforeUnmount(() => {
   border-bottom: 1px solid #fff;
   align-items: center;
   flex-wrap: wrap;
+  justify-content: center;
 }
+
 .controls button {
   height: 34px;
   padding: 5px 10px;
@@ -541,45 +524,57 @@ onBeforeUnmount(() => {
   background: white;
   cursor: pointer;
   border-radius: 3px;
+  transition: background 0.2s ease;
 }
+
 .controls button:hover:not(:disabled) {
   background: #e9e9e9;
 }
+
 .controls button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
 .controls input {
   padding: 5px;
   border: 1px solid #ccc;
   border-radius: 3px;
+  min-width: 50px;
 }
+
 .main-container {
   display: flex;
   flex: 1;
   overflow: auto;
   border-top: 1px solid #fff;
+  background-color: #333;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 20px;
+  box-sizing: border-box;
 }
 
 .pdf-container {
   position: relative;
-  background: #555;
   display: flex;
   justify-content: center;
   align-items: flex-start;
-  padding: 0;
-  margin: auto;
   box-sizing: border-box;
-  max-width: 800px;
-  max-height: calc(100vh - 100px);
+  background: #555;
+  overflow: hidden;
+  max-width: 100%;
+  max-height: 100%;
   overflow: auto;
 }
 
 .pdf-container canvas {
   background: white;
-  box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+  box-shadow: 0 4px 8px rgba(0,0,0,0.2);
   display: block;
+  border-radius: 5px;
 }
+
 .text-layer {
   position: absolute;
   left: 0;
@@ -587,30 +582,42 @@ onBeforeUnmount(() => {
   right: 0;
   bottom: 0;
   overflow: hidden;
-  opacity: 0.2; /* This opacity might make highlights less visible, consider adjusting */
+  opacity: 1.0;
   line-height: 1.0;
   pointer-events: none;
+  z-index: 1;
 }
+
 .text-layer > div {
   color: transparent;
   position: absolute;
   white-space: pre;
   cursor: text;
   transform-origin: 0% 0%;
+  box-sizing: border-box;
 }
+
 .loading, .error {
   padding: 20px;
   text-align: center;
   font-size: 16px;
-}
-.error {
-  color: red;
-  background: #ffe6e6;
-  border: 1px solid #ffcccc;
   border-radius: 4px;
   margin: 10px;
 }
+
+.error {
+  color: #c00;
+  background: #ffebeb;
+  border: 1px solid #fbb;
+}
+
 .loading {
-  color: #666;
+  color: #007bff;
+  background: #e6f7ff;
+  border: 1px solid #b3e0ff;
+}
+
+.current-highlight {
+  background-color: rgba(0, 255, 0, 0.5) !important;
 }
 </style>
